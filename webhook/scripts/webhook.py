@@ -25,6 +25,18 @@ REDIS_DB = int(os.environ.get("REDIS_DB", 0))
 
 redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB)
 
+def check_rate_limit() -> bool:
+    """
+    Uses a key that expires after 1 minute.
+    """
+    current_time = int(time.time())
+    window_key = f"rate_limit:{current_time // 60}"
+    
+    redis_client.set(window_key, 1, nx=True, ex=120)
+    
+    current_count = redis_client.incr(window_key)
+    
+    return current_count <= MAX_ALERTS_PER_MINUTE
 
 def main():
     try:
@@ -47,6 +59,10 @@ def main():
 
         # Pydantic validation (includes key checking via Config.extra='forbid')
         alert = TradingViewAlert.model_validate(raw_json)
+
+        # --- Rate limiting ---
+        if not check_rate_limit():
+            raise ValueError("Rate limit exceeded. Try again later.")
 
         # Push to Redis queue
         redis_client.rpush("webhook_alerts", alert.model_dump_json())
